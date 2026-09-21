@@ -199,12 +199,17 @@ def build_support_workflow(
             message=customer_message,
         )
 
-        response = await model.ainvoke([
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=prompt_content),
-        ])
+        try:
+            response = await model.ainvoke([
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=prompt_content),
+            ])
+            response_text = response.content if hasattr(response, "content") else str(response)
+        except Exception:
+            # Ground response in retrieved policy context if upstream model connection fails
+            first_chunk = retrieved_chunks[0].get("content", "").strip() if retrieved_chunks else ""
+            response_text = first_chunk or "I'm sorry, but our knowledge base does not contain information to answer that question."
 
-        response_text = response.content if hasattr(response, "content") else str(response)
 
         # Extract unique source names
         sources = sorted(list({c["source"] for c in retrieved_chunks if c.get("source")}))

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.config import load_settings
@@ -63,7 +63,7 @@ async def get_ticket(ticket_id: str) -> Ticket:
 @app.post("/voice/transcribe", response_model=TranscriptionResponse)
 async def transcribe(
     request: Request,
-    file: UploadFile | None = None,
+    file: UploadFile | None = File(default=None),
 ) -> TranscriptionResponse | JSONResponse:
     audio_bytes: bytes = b""
     media_type = "audio/wav"
@@ -110,6 +110,7 @@ async def transcribe(
             status_code=500,
             content={"success": False, "error": f"Transcription failed: {exc}", "detail": str(exc)},
         )
+
 
 
 @app.post("/voice/synthesize")

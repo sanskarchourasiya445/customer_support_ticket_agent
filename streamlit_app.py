@@ -1,3 +1,4 @@
+import hashlib
 import os
 import uuid
 
@@ -5,7 +6,12 @@ import httpx
 import streamlit as st
 
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+try:
+    from src.config import load_settings
+    _settings = load_settings()
+    API_BASE_URL = os.getenv("API_BASE_URL", f"http://{_settings.api_host}:{_settings.api_port}")
+except Exception:
+    API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Customer Support", page_icon="🎧")
 st.title("Customer Support")
@@ -20,6 +26,8 @@ if "voice_transcript" not in st.session_state:
     st.session_state.voice_transcript = ""
 if "last_transcribed_audio_id" not in st.session_state:
     st.session_state.last_transcribed_audio_id = None
+
+
 
 
 def render_assistant_extra(msg: dict) -> None:
@@ -91,36 +99,51 @@ with st.sidebar:
         st.session_state.last_transcribed_audio_id = None
         st.rerun()
 
+
 # Voice input section with audio recorder and editable transcript
-with st.expander("🎙️ Voice Input (Record Question)", expanded=False):
+# Keep expanded so recording and reviewing is always directly visible
+with st.expander("🎙️ Voice Input (Record Question)", expanded=True):
     st.caption("Record your question using the microphone. You will be able to review and edit the transcribed text before submitting to the agent.")
     audio_file = st.audio_input("Record audio question", key="mic_recorder")
 
     if audio_file is not None:
-        audio_id = getattr(audio_file, "file_id", None) or getattr(audio_file, "name", None) or str(id(audio_file))
-        if st.session_state.last_transcribed_audio_id != audio_id:
-            with st.spinner("Transcribing audio..."):
-                try:
-                    audio_bytes = audio_file.getvalue()
-                    with httpx.Client(timeout=30.0) as client:
-                        files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
-                        t_res = client.post(f"{API_BASE_URL}/voice/transcribe", files=files)
-                        if t_res.status_code == 200:
-                            data = t_res.json()
-                            st.session_state.voice_transcript = data.get("transcript", "")
-                            st.session_state.last_transcribed_audio_id = audio_id
-                            st.success(f"Transcribed successfully ({data.get('processing_time_ms', 0)} ms)")
-                        else:
-                            err = t_res.json().get("detail") or t_res.json().get("error") or t_res.text
-                            st.warning(f"Transcription notice: {err}")
-                except Exception as exc:
-                    st.error(f"Transcription request failed: {exc}")
+        audio_bytes = audio_file.getvalue()
+        if not audio_bytes or len(audio_bytes) < 100:
+            st.warning("Recorded audio is empty or too short. Please speak into your microphone.")
+        else:
+            audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+            if st.session_state.last_transcribed_audio_id != audio_hash:
+                with st.spinner("Transcribing audio..."):
+                    try:
+                        content_type = getattr(audio_file, "type", None) or "audio/wav"
+                        filename = getattr(audio_file, "name", None) or "recording.wav"
+                        files = {"file": (filename, audio_bytes, content_type)}
+                        with httpx.Client(timeout=45.0) as client:
+                            t_res = client.post(f"{API_BASE_URL}/voice/transcribe", files=files)
+                            if t_res.status_code == 200:
+                                data = t_res.json()
+                                transcript_text = data.get("transcript", "").strip()
+                                if transcript_text:
+                                    st.session_state.voice_transcript = transcript_text
+                                    st.session_state.last_transcribed_audio_id = audio_hash
+                                    st.rerun()
+
+                                else:
+                                    st.warning("No speech could be detected in the recording. Please try speaking clearly.")
+                            else:
+                                err = t_res.json().get("detail") or t_res.json().get("error") or t_res.text
+                                st.warning(f"Transcription notice: {err}")
+                    except Exception as exc:
+                        st.error(f"Transcription request failed: {exc}")
 
     if st.session_state.voice_transcript:
+        st.write("##### Review & Edit Transcript:")
+        draft_key = f"transcript_edit_{st.session_state.last_transcribed_audio_id}"
         edited_transcript = st.text_area(
-            "Review / Edit Transcript before sending:",
+            "Transcribed speech (editable):",
             value=st.session_state.voice_transcript,
-            key="editable_transcript_area",
+            key=draft_key,
+            label_visibility="collapsed",
             help="Review or edit the text. Click 'Send Voice Question' to submit.",
         )
         col_send, col_discard = st.columns([2, 1])
@@ -135,6 +158,8 @@ with st.expander("🎙️ Voice Input (Record Question)", expanded=False):
             if st.button("Discard", key="discard_transcript_btn", use_container_width=True):
                 st.session_state.voice_transcript = ""
                 st.rerun()
+
+
 
 # Display chat history
 for idx, message in enumerate(st.session_state.messages):

@@ -33,21 +33,47 @@ class WhisperSTTService(STTService):
         loop = asyncio.get_running_loop()
 
         def _run_transcription() -> str:
-            try:
-                result = self._pipeline(audio_bytes)
-                text = (result.get("text") or "").strip()
-                if text:
-                    return text
-            except Exception:
-                pass
+            import os
+            import tempfile
+
+            generate_kwargs = {"language": "en", "task": "transcribe"}
 
             try:
                 with io.BytesIO(audio_bytes) as bio:
                     data, samplerate = sf.read(bio)
                     if len(data.shape) > 1:
                         data = data.mean(axis=1)
-                    result = self._pipeline({"raw": data.astype("float32"), "sampling_rate": samplerate})
-                    return (result.get("text") or "").strip()
+                    result = self._pipeline(
+                        {"raw": data.astype("float32"), "sampling_rate": samplerate},
+                        generate_kwargs=generate_kwargs,
+                    )
+                    text = (result.get("text") or "").strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+
+            try:
+                suffix = ".wav" if "wav" in media_type else ".tmp"
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+                    tf.write(audio_bytes)
+                    tmp_name = tf.name
+                try:
+                    result = self._pipeline(tmp_name, generate_kwargs=generate_kwargs)
+                    text = (result.get("text") or "").strip()
+                    if text:
+                        return text
+                finally:
+                    if os.path.exists(tmp_name):
+                        os.unlink(tmp_name)
+            except Exception:
+                pass
+
+            try:
+                result = self._pipeline(audio_bytes, generate_kwargs=generate_kwargs)
+                text = (result.get("text") or "").strip()
+                if text:
+                    return text
             except Exception as exc:
                 raise ValueError(f"Could not decode audio or detect speech: {exc}")
 

@@ -180,3 +180,69 @@ def test_api_synthesize_failure_returns_500(voice_client: TestClient) -> None:
     response = voice_client.post("/voice/synthesize", json=payload)
     assert response.status_code == 500
     assert "Synthesis failed" in response.json()["detail"]
+
+
+def test_chat_rag_policy_returns_grounded_answer(voice_client: TestClient) -> None:
+    payload = {
+        "session_id": "session-rag-test",
+        "message": "How long does standard delivery shipping take?",
+    }
+    response = voice_client.post("/chat", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "shipping" in data["response"].lower()
+    assert "shipping.md" in data["sources"]
+
+
+
+def test_chat_ticket_creation_flow(voice_client: TestClient) -> None:
+    sid = "session-ticket-voice-flow"
+    r1 = voice_client.post("/chat", json={"session_id": sid, "message": "My payment was charged twice"})
+    assert r1.status_code == 200
+    assert r1.json()["ticket_id"] is None
+
+    r2 = voice_client.post("/chat", json={"session_id": sid, "message": "My name is Jane Doe"})
+    assert r2.status_code == 200
+    assert r2.json()["ticket_id"] is None
+
+    r3 = voice_client.post("/chat", json={"session_id": sid, "message": "jane.doe@example.com"})
+    assert r3.status_code == 200
+    data = r3.json()
+    assert data["ticket_id"] is not None
+    assert data["ticket_id"].startswith("CST-2026-")
+
+
+def test_streamlit_voice_session_state_lifecycle() -> None:
+    from streamlit.testing.v1 import AppTest
+
+    app_path = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+    at = AppTest.from_file(str(app_path))
+    at.run()
+    # Initially, no text area is shown
+
+    assert len(at.text_area) == 0
+
+    # Simulate STT setting the transcript
+    at.session_state["voice_transcript"] = "What is the shipping cost?"
+    at.session_state["last_transcribed_audio_id"] = "test-hash-1"
+    at.run()
+
+    # Now the text area is visible with the transcript
+    assert len(at.text_area) == 1
+    assert at.text_area[0].value == "What is the shipping cost?"
+
+    # Simulate user editing the transcript
+    at.text_area[0].input("What is the standard delivery shipping cost?").run()
+    assert at.text_area[0].value == "What is the standard delivery shipping cost?"
+
+    # Click Discard
+    discard_btn = next((b for b in at.button if "Discard" in b.label), None)
+    assert discard_btn is not None
+    discard_btn.click().run()
+
+    # After discard, text area is closed
+    assert len(at.text_area) == 0
+    assert at.session_state["voice_transcript"] == ""
+
+
